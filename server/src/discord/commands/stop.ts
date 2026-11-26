@@ -4,18 +4,15 @@ import type { Command } from './types.js';
 export const stop: Command = {
   data: new SlashCommandBuilder()
     .setName('stop')
-    .setDescription('Stop the current audio stream but stay in the channel'),
+    .setDescription('Stop the browser audio stream but stay in the channel'),
 
-  async execute(interaction, { voice }) {
-    if (!voice.getSession(interaction.guildId)) {
-      await interaction.reply({ content: "I'm not in a voice channel.", flags: MessageFlags.Ephemeral });
-      return;
-    }
-    const stopped = voice.stopPlayback(interaction.guildId);
+  async execute(interaction, { voice, hub }) {
+    const hadStream = await hub.forceStop(`/stop by ${interaction.user.tag}`);
+    const hadAudio = voice.stopPlayback(interaction.guildId);
     await interaction.reply(
-      stopped
-        ? { content: '⏹️ Stopped the audio stream.' }
-        : { content: 'Nothing is playing right now.', flags: MessageFlags.Ephemeral },
+      hadStream || hadAudio
+        ? { content: '⏹️ Stopped the audio stream. Press **Share Audio** in the extension to start again.' }
+        : { content: 'Nothing is streaming right now.', flags: MessageFlags.Ephemeral },
     );
   },
 };

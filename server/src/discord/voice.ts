@@ -77,7 +77,9 @@ export class VoiceManager {
       session.joinedBy = requestedBy;
     } else {
       const player = createAudioPlayer({
-        behaviors: { noSubscriber: NoSubscriberBehavior.Pause },
+        // Short network stalls are bridged by the jitter buffer (silence is sent);
+        // after 1 s with no audio the player stops and the bot stops "speaking".
+        behaviors: { noSubscriber: NoSubscriberBehavior.Pause, maxMissedFrames: 50 },
       });
       player.on('error', (err) => log.error(`Audio player error in guild ${guildId}`, err));
       player.on('stateChange', (o, n) => {

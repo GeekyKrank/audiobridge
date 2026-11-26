@@ -3,13 +3,23 @@
   "private": true,
   "version": "0.1.0",
   "description": "Share a Chrome tab's audio into a Discord voice channel through your own server.",
-  "workspaces": ["server"],
-  "engines": { "node": ">=22.12.0" },
+  "workspaces": [
+    "shared",
+    "server"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "dev": "npm run dev -w server",
     "build": "npm run build -w server",
     "start": "npm run start -w server",
     "typecheck": "npm run typecheck -w server",
-    "deploy-commands": "npm run deploy-commands -w server"
+    "deploy-commands": "npm run deploy-commands -w server",
+    "test": "npm test -w server",
+    "sync-protocol": "node scripts/sync-protocol.mjs",
+    "e2e": "node scripts/e2e-browser.mjs",
+    "icons": "node scripts/make-icons.mjs",
+    "gen-token": "node -e \"console.log(require('crypto').randomBytes(32).toString('base64url'))\""
   }
 }

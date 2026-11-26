@@ -12,7 +12,7 @@ export const help: Command = {
         [
           '`/join [channel]` — join your voice channel (or the one given)',
           '`/leave` — leave the voice channel',
-          '`/stop` — stop the current audio stream, stay connected',
+          '`/stop` — stop the browser audio stream, stay connected',
           '`/status` — show the current session',
           '`/help` — this list',
           '',

@@ -4,22 +4,28 @@
   "version": "0.1.0",
   "type": "module",
   "main": "dist/index.js",
-  "engines": { "node": ">=22.12.0" },
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "dev": "tsx watch --env-file-if-exists=.env src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node --env-file-if-exists=.env dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "deploy-commands": "tsx --env-file-if-exists=.env scripts/deploy-commands.ts",
-    "voice-report": "node -e \"import('@discordjs/voice').then(v=>console.log(v.generateDependencyReport()))\""
+    "voice-report": "node -e \"import('@discordjs/voice').then(v=>console.log(v.generateDependencyReport()))\"",
+    "test": "node --import tsx --test test/*.test.ts"
   },
   "dependencies": {
     "@discordjs/voice": "0.19.2",
-    "discord.js": "14.28.1"
+    "discord.js": "14.28.1",
+    "@soundbridge/shared": "0.1.0",
+    "ws": "8.23.0"
   },
   "devDependencies": {
     "@types/node": "^22.19.0",
     "tsx": "^4.23.15",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "@types/ws": "^8.18.1"
   }
 }
