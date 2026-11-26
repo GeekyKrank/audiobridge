@@ -1,5 +1,5 @@
 import { AudioPlayerStatus, createAudioResource, StreamType, type AudioResource } from '@discordjs/voice';
-import type { Client, VoiceBasedChannel } from 'discord.js';
+import { Events, type Client, type VoiceBasedChannel } from 'discord.js';
 import { OpusJitterStream } from '../audio/jitter.js';
 import type { Config } from '../config/env.js';
 import type { VoiceManager } from '../discord/voice.js';
@@ -8,6 +8,7 @@ import { SinkError, type AudioSink, type StreamStartRequest } from './types.js';
 
 const log = createLogger('discord-sink');
 const FRAME_MS = 20;
+const READY_WAIT_MS = 15_000;
 
 /**
  * Plays the incoming Opus packets in the bot's voice channel without transcoding:
@@ -32,13 +33,34 @@ export class DiscordSink implements AudioSink {
     return this.config.discordGuildId;
   }
 
+  /**
+   * Right after a server restart the extension reconnects (~1 s) before the bot has
+   * logged in to Discord (~1-2 s). Wait for the login instead of refusing the stream.
+   */
+  private async waitReady(): Promise<Client<true>> {
+    if (this.client.isReady()) return this.client;
+    await new Promise<void>((resolve, reject) => {
+      const onReady = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        this.client.off(Events.ClientReady, onReady);
+        reject(new SinkError('BOT_OFFLINE', 'The Discord bot is not connected yet.'));
+      }, READY_WAIT_MS);
+      this.client.once(Events.ClientReady, onReady);
+    });
+    if (!this.client.isReady()) throw new SinkError('BOT_OFFLINE', 'The Discord bot is not connected yet.');
+    return this.client;
+  }
+
   async begin(req: StreamStartRequest) {
     this.targetFrames = Math.max(5, Math.round(req.bufferMs / FRAME_MS));
     this.maxFrames = Math.max(this.targetFrames + 10, Math.round(this.config.maxBufferMs / FRAME_MS));
     this.closePipe();
 
-    if (!this.client.isReady()) throw new SinkError('BOT_OFFLINE', 'The Discord bot is not connected yet.');
-    const guild = this.client.guilds.cache.get(this.guildId);
+    const client = await this.waitReady();
+    const guild = client.guilds.cache.get(this.guildId);
     if (!guild) throw new SinkError('NO_GUILD', 'The bot is not in the configured Discord server.');
 
     const current = this.voice.getSession(this.guildId);
@@ -71,7 +93,7 @@ export class DiscordSink implements AudioSink {
       throw new SinkError('NO_CHANNEL', 'Pick a voice channel in the extension, or join one in Discord first.');
     }
 
-    await this.voice.join(channel, this.client.user.id);
+    await this.voice.join(channel, client.user.id);
     return { channel: { id: channel.id, name: channel.name } };
   }
 

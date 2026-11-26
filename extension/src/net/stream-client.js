@@ -91,7 +91,9 @@ export class StreamClient {
       }
       const delay = BACKOFF_MS[Math.min(this.attempt, BACKOFF_MS.length - 1)];
       this.attempt++;
-      this.setState('reconnecting', `Connection lost, retrying in ${Math.round(delay / 1000)} s`);
+      const why = this.retryReason ?? 'Connection lost';
+      this.retryReason = null;
+      this.setState('reconnecting', `${why}, retrying in ${Math.round(delay / 1000)} s`);
       this.retryTimer = setTimeout(() => this.connect(), delay);
     };
     ws.onerror = () => {
@@ -121,6 +123,12 @@ export class StreamClient {
         this.serverStats = msg.stats;
         break;
       case 'error':
+        if (msg.code === 'BOT_OFFLINE' && this.opts.autoReconnect) {
+          // Temporary (server restarting, Discord hiccup): close quietly, onclose retries with backoff.
+          this.retryReason = 'Discord bot is offline';
+          this.ws?.close(1000);
+          break;
+        }
         this.setState('error', msg.message || msg.code);
         this.ws?.close(1000);
         break;
