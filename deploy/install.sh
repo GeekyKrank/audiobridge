@@ -95,6 +95,13 @@ log "Installing dependencies and building (takes a minute on a micro VM)"
 cd "$APP_DIR"
 sudo -u soundbridge -H npm ci --no-audit --no-fund --loglevel=error
 sudo -u soundbridge -H npm run build --silent
+
+discord_ready=1
+grep -qE '^DISCORD_TOKEN=$' "$ENV_FILE" && discord_ready=0
+if (( discord_ready )); then
+  # Before the prune below: the registration script runs through tsx (a dev dependency).
+  sudo -u soundbridge -H bash -c "cd $APP_DIR/server && npm run deploy-commands --silent" || warn "Slash command registration failed (check the Discord values)."
+fi
 sudo -u soundbridge -H npm prune --omit=dev --no-audit --no-fund --loglevel=error
 
 # ---------- 4. service ----------
@@ -104,13 +111,12 @@ chmod 644 /etc/systemd/system/soundbridge.service
 systemctl daemon-reload
 systemctl enable soundbridge >/dev/null 2>&1
 
-if grep -qE '^DISCORD_TOKEN=$' "$ENV_FILE"; then
+if (( discord_ready )); then
+  start_service=1
+  systemctl restart soundbridge
+else
   warn "DISCORD_TOKEN is empty in $ENV_FILE - not starting the service yet."
   start_service=0
-else
-  start_service=1
-  sudo -u soundbridge -H bash -c "cd $APP_DIR/server && npm run deploy-commands --silent" || warn "Slash command registration failed (check the Discord values)."
-  systemctl restart soundbridge
 fi
 
 # ---------- 5. Caddy ----------
@@ -150,7 +156,8 @@ if command -v ufw >/dev/null && ufw status | grep -q 'Status: active'; then
 elif iptables -S INPUT 2>/dev/null | grep -q -- '-j REJECT'; then
   # Oracle's Ubuntu images ship iptables rules that REJECT everything except SSH.
   for p in 80 443; do
-    if ! iptables -C INPUT -p tcp --dport "$p" -m state --state NEW -j ACCEPT 2>/dev/null; then
+    # Skip if any ACCEPT rule already covers the port (also "--dports 80,443" style).
+    if ! iptables -S INPUT | grep -- '-j ACCEPT' | grep -qE -- "--dports? ([0-9,:]*,)?$p(,|[[:space:]]|$)"; then
       log "Opening port $p in iptables"
       line=$(iptables -L INPUT --line-numbers | awk '/REJECT/ {print $1; exit}')
       iptables -I INPUT "$line" -p tcp --dport "$p" -m state --state NEW -j ACCEPT
