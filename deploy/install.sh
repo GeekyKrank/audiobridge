@@ -115,10 +115,32 @@ fi
 
 # ---------- 5. Caddy ----------
 log "Configuring Caddy for https://$DOMAIN"
-[[ -f /etc/caddy/Caddyfile && ! -f /etc/caddy/Caddyfile.before-soundbridge ]] && cp /etc/caddy/Caddyfile /etc/caddy/Caddyfile.before-soundbridge
-sed -e "s|__DOMAIN__|$DOMAIN|" -e "s|__PORT__|$PORT|" "$APP_DIR/deploy/Caddyfile.template" > /etc/caddy/Caddyfile
-mkdir -p /var/log/caddy && chown caddy:caddy /var/log/caddy
-caddy validate --config /etc/caddy/Caddyfile >/dev/null
+# Our site lives in its own file and the main Caddyfile only imports it, so sites
+# that this Caddy already serves for other apps are kept.
+CADDYFILE=/etc/caddy/Caddyfile
+SITE_FILE=/etc/caddy/soundbridge.caddy
+IMPORT_LINE="import $SITE_FILE"
+mkdir -p /etc/caddy /var/log/caddy && chown caddy:caddy /var/log/caddy
+[[ -f $CADDYFILE && ! -f $CADDYFILE.before-soundbridge ]] && cp -p "$CADDYFILE" "$CADDYFILE.before-soundbridge"
+caddy_backup=""
+if [[ -f $CADDYFILE ]]; then caddy_backup=$(mktemp); cp -p "$CADDYFILE" "$caddy_backup"; fi
+site_backup=""
+if [[ -f $SITE_FILE ]]; then site_backup=$(mktemp); cp -p "$SITE_FILE" "$site_backup"; fi
+sed -e "s|__DOMAIN__|$DOMAIN|" -e "s|__PORT__|$PORT|" "$APP_DIR/deploy/Caddyfile.template" > "$SITE_FILE"
+chmod 644 "$SITE_FILE"
+if [[ ! -f $CADDYFILE ]] || grep -q '/usr/share/caddy' "$CADDYFILE" || grep -q 'soundbridge\.log' "$CADDYFILE"; then
+  # Stock Caddyfile (placeholder page) or one written by an older version of this script.
+  echo "$IMPORT_LINE" > "$CADDYFILE"
+elif ! grep -qxF "$IMPORT_LINE" "$CADDYFILE"; then
+  log "Keeping the existing sites in $CADDYFILE and adding SoundBridge next to them"
+  printf '\n%s\n' "$IMPORT_LINE" >> "$CADDYFILE"
+fi
+if ! caddy validate --adapter caddyfile --config "$CADDYFILE" >/dev/null 2>&1; then
+  if [[ -n $caddy_backup ]]; then mv "$caddy_backup" "$CADDYFILE"; fi
+  if [[ -n $site_backup ]]; then mv "$site_backup" "$SITE_FILE"; else rm -f "$SITE_FILE"; fi
+  die "Caddy rejected the new config; restored the previous one. Details: caddy validate --config $CADDYFILE"
+fi
+for f in "$caddy_backup" "$site_backup"; do if [[ -n $f ]]; then rm -f "$f"; fi; done
 systemctl reload caddy 2>/dev/null || systemctl restart caddy
 
 # ---------- 6. firewall (VM level; the Oracle Security List is separate!) ----------

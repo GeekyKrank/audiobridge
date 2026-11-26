@@ -64,8 +64,10 @@ The script (idempotent, safe to re-run for updates):
 3. copies the app to `/opt/soundbridge`, builds, removes dev dependencies,
 4. installs `soundbridge.service` (systemd: auto-start on boot, restart on crash,
    memory cap, hardening) and registers slash commands,
-5. writes `/etc/caddy/Caddyfile` for your domain (old one backed up) — Caddy gets
-   and renews the Let's Encrypt certificate automatically,
+5. writes the site to `/etc/caddy/soundbridge.caddy` and adds `import` of it to
+   `/etc/caddy/Caddyfile` — sites Caddy already serves for other apps stay as they are
+   (original backed up as `Caddyfile.before-soundbridge`; on a config error the previous
+   one is restored). Caddy gets and renews the Let's Encrypt certificate automatically,
 6. opens 80/443 in the VM firewall (Oracle images block them with iptables by default).
 
 If you run the bot on your PC too, stop it there: one bot token = one running bot.
