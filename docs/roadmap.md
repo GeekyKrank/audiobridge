@@ -1,17 +1,31 @@
 # Roadmap
 
-Each phase ends with something you can test by hand. We don't start the next
-phase until the current one works.
+| # | Phase | Status |
+|---|---|---|
+| 1 | Discord bot: login, `/join /leave /stop /status /help`, auto-leave, reconnect | ✅ built · needs live Discord test |
+| 2 | Extension: tab list, tabCapture via offscreen doc, local monitoring, Opus encoding | ✅ built · engine verified in Chromium; real tabCapture needs your click |
+| 3 | Local streaming: protocol, WebSocket ingest, auth, limits, `.ogg` recorder | ✅ built · verified end-to-end (automated) |
+| 4 | Discord playback: jitter buffer → `@discordjs/voice` without transcoding | ✅ built · verified with the real AudioPlayer; live voice needs your test |
+| 5 | Oracle deployment: install script, systemd, Caddy HTTPS/WSS, firewall, logs | ✅ scripts built · app part verified on Ubuntu 24.04; needs your VM |
+| 6 | Browser → Oracle: settings, status, reconnect, single session | ✅ built · reconnect verified (automated) |
+| 7 | Sync: pause/resume via loudness, track/seek, tab close, metadata (tab title) | ✅ built · pause/resume verified (automated) |
+| 8 | UI polish: dark UI, status, stats, settings, errors, quality presets | ✅ built |
 
-| # | Phase | Deliverable | Test | Status |
-|---|---|---|---|---|
-| 1 | Discord bot | Bot logs in; `/join` `/leave` `/stop` `/status` `/help`; auto-leave empty channel | Bot joins/leaves your voice channel | **Code done — needs your test** |
-| 2 | Local tab capture | MV3 extension: tab list, capture via offscreen doc, local monitoring, sharing indicator, WebCodecs Opus encoder producing packets (counted, not sent) | Tab stays audible; packet counter rises ~50/s | Not started |
-| 3 | Local streaming | `shared/` protocol, WebSocket ingest on `localhost` with token auth + limits; server writes received Opus to an `.ogg` file for verification | Recorded file sounds right incl. pause/resume | Not started |
-| 4 | Discord playback | Ingest → jitter buffer → `AudioPlayer` (`StreamType.Opus`) | Friends hear the tab while running locally | Not started |
-| 5 | Oracle deployment | Inspect VPS, Node 22, systemd service, Caddy WSS, firewall, logs | `wss://` reachable, bot auto-restarts | Not started |
-| 6 | Browser → Oracle | Extension talks to WSS, status, reconnect, single-session | Full pipeline Chrome → Oracle → Discord | Not started |
-| 7 | Sync & recovery | Silence detection, tab-close, network drop recovery, metadata (optional) | Pause/seek/track switch/close tab | Not started |
-| 8 | UI polish | Final design, settings, error messages, quality presets | — | Not started |
+See [testing.md](testing.md) for what is verified automatically and what you need to
+check by hand.
 
-Future ideas (only after 1–8 are stable): see the master prompt, section 13.
+## Known limitations
+
+* Chrome only allows capturing a tab after you invoke SoundBridge on it (icon, Alt+Shift+S,
+  or right-click menu). Picking an arbitrary background tab from the list works only if
+  SoundBridge was opened on it before.
+* DRM-protected players may capture as silence; not bypassed by design.
+* Metadata is the tab title/site/favicon, not per-site track parsing.
+* One stream at a time (personal use). The server code is structured (hub + sinks)
+  so multiple sessions could be added later.
+
+## Future ideas (not started)
+
+Multiple tabs/sources, Discord buttons for the browser player, album art via Media
+Session (needs host permissions), web dashboard, session history, Opus FEC for lossy
+networks, optional direct mode without the cloud relay.

@@ -1,86 +1,84 @@
-# Setup — Phase 1 (Discord bot, running on your PC)
+# Setup on your PC (local test before Oracle)
 
-You need **Node.js 22.12 or newer** (`node -v`). On Windows install the LTS from
-<https://nodejs.org>.
+Everything runs on your Windows PC first: the server on `localhost`, the extension in
+Chrome, the bot in your Discord server. When this works, move the server to Oracle
+([deployment.md](deployment.md)).
 
-## 1. Create the Discord application and bot
+Requirements: **Node.js 22.12+** (`node -v`; LTS from <https://nodejs.org>), **Git**,
+**Chrome 116+**.
 
-1. Open <https://discord.com/developers/applications> → **New Application** → name it `SoundBridge`.
-2. **General Information** → copy **Application ID** → this is `DISCORD_CLIENT_ID`.
+## 1. Discord application and bot
+
+1. <https://discord.com/developers/applications> → **New Application** → `SoundBridge`.
+2. **General Information** → copy **Application ID** → `DISCORD_CLIENT_ID`.
 3. **Bot** tab:
-   * **Reset Token** → copy it → this is `DISCORD_TOKEN`. Treat it like a password.
-   * Turn **Public Bot** *off* (so only you can invite it).
-   * Privileged Gateway Intents: leave all **off** — SoundBridge doesn't need them.
-4. Invite the bot to your server (replace `YOUR_APP_ID`):
-
+   * **Reset Token** → copy → `DISCORD_TOKEN` (a password — never share it).
+   * **Public Bot**: off.
+   * Privileged Gateway Intents: all **off** (not needed).
+4. Invite the bot (replace `YOUR_APP_ID`):
    ```
    https://discord.com/oauth2/authorize?client_id=YOUR_APP_ID&scope=bot+applications.commands&permissions=3146752
    ```
+   (`3146752` = View Channels + Connect + Speak.)
+5. Discord → Settings → Advanced → **Developer Mode** on. Right-click your server →
+   **Copy Server ID** → `DISCORD_GUILD_ID`. Right-click yourself → **Copy User ID** →
+   `ALLOWED_USER_IDS`.
 
-   `3146752` = View Channels + Connect + Speak. Nothing else.
+## 2. Server
 
-## 2. Get your server and user IDs
-
-Discord → User Settings → Advanced → enable **Developer Mode**. Then:
-
-* right-click your server icon → **Copy Server ID** → `DISCORD_GUILD_ID`
-* right-click your own name → **Copy User ID** → put it in `ALLOWED_USER_IDS`
-  (comma-separate several friends' IDs if they should control it too)
-
-## 3. Configure and install
-
-```bash
-git clone <your repo> soundbridge
+```powershell
+git clone https://github.com/GeekyKrank/audiobridge.git soundbridge
 cd soundbridge
+git checkout ccr-db9dfb71-7eamay      # until merged into main
 npm install
-cp .env.example server/.env      # Windows PowerShell: Copy-Item .env.example server/.env
-# edit server/.env and fill in the values
+npm run gen-token                      # prints a random ACCESS_TOKEN
+Copy-Item .env.example server/.env     # macOS/Linux: cp .env.example server/.env
+notepad server/.env                    # fill DISCORD_*, ALLOWED_USER_IDS, ACCESS_TOKEN
+npm run deploy-commands                # registers /join /leave /stop /status /help
+npm run dev                            # starts bot + server on http://localhost:8787
 ```
 
-## 4. Register slash commands (once, and whenever commands change)
+Expected log lines: `Listening on http://127.0.0.1:8787`, `Logged in as SoundBridge#…`,
+`Serving guild "…"`.
 
-```bash
-npm run deploy-commands
-```
+## 3. Extension
 
-Expected: `Registered 5 slash commands in guild …`.
+1. Chrome → `chrome://extensions` → enable **Developer mode** (top right).
+2. **Load unpacked** → choose the `extension` folder of the repo.
+3. Pin SoundBridge (puzzle icon → pin).
+4. Click the icon → Settings opens:
+   * Server URL: `http://localhost:8787`
+   * Access token: the `ACCESS_TOKEN` from `server/.env`
+   * **Test connection** → should say "Connected … Bot: SoundBridge#… in <server>" → **Save**.
+5. Optional hardening: copy the extension ID from `chrome://extensions` into
+   `EXTENSION_ID=` in `server/.env` and restart the server.
 
-## 5. Run the bot
+## 4. Share
 
-```bash
-npm run dev      # development: restarts on file changes
-# or
-npm run build && npm start
-```
+1. Join a voice channel in Discord.
+2. Open SoundCloud (or YouTube…) and play something.
+3. **On that tab**, click the SoundBridge icon → (optionally pick a voice channel) →
+   **Share Audio**. Or press **Alt+Shift+S** on the tab.
+4. The bot joins your channel; friends hear the tab. The badge on the icon shows `ON`.
 
-Expected log: `Logged in as SoundBridge#1234` and `Serving guild "…"`.
+Then go through [testing.md](testing.md).
 
-## 6. Phase 1 test checklist
+## Local test without Discord
 
-| Test | Expected |
+Set `DISCORD_ENABLED=false` and `RECORD_DIR=../recordings` in `server/.env`. Every share
+is saved as an `.ogg` file you can open in VLC/Chrome to hear exactly what would be sent.
+
+## Troubleshooting
+
+| Problem | Fix |
 |---|---|
-| Type `/` in your server | `/join`, `/leave`, `/stop`, `/status`, `/help` show up |
-| Join a voice channel, run `/join` | Bot appears in the channel (deafened icon), reply "Joined …" |
-| `/join channel:<other channel>` | Bot moves to that channel |
-| `/status` | Shows channel, connection `ready`, player `idle` |
-| `/stop` | "Nothing is playing right now." (no audio until Phase 4) |
-| `/leave` | Bot leaves |
-| `/join`, then everyone leaves the channel | Bot leaves by itself after ~60 s |
-| Drag the bot to another channel in Discord | It stays connected; `/status` shows the new channel |
-| Disconnect the bot via right-click → Disconnect | It leaves cleanly, `/status` says not connected |
-| A user **not** in `ALLOWED_USER_IDS` runs `/join` | "You're not allowed to control SoundBridge." |
-| Ctrl+C the bot | Leaves voice and exits |
-
-### Troubleshooting
-
-* `Invalid configuration` — a value in `server/.env` is missing or not a numeric ID.
-* `Used disallowed intents` — you enabled nothing? Good. This error means the code asks
-  for a privileged intent; it shouldn't. Report it.
-* `Could not connect to the voice channel within 20 seconds` — check the bot role has
-  Connect + Speak in that channel; corporate/school networks sometimes block Discord voice UDP.
-* Commands don't appear — re-run `npm run deploy-commands`, check `DISCORD_GUILD_ID`,
-  and make sure the invite URL included `applications.commands`.
-* Run `npm run voice-report -w server` to see voice dependencies. You should see
-  `native crypto support for aes-256-gcm: yes` and `@snazzah/davey` (Discord's
-  required voice end-to-end encryption, "DAVE"). No Opus library or FFmpeg is needed:
-  the browser will send ready-made Opus packets.
+| `Invalid configuration` on start | The message lists the bad values in `server/.env`. |
+| Popup: "Offline" | Server not running, or wrong Server URL. |
+| Popup: "Wrong access token" | Token in the extension ≠ `ACCESS_TOKEN` in `server/.env`. |
+| "Chrome needs you to open SoundBridge on that tab first" | Chrome rule: switch to that tab and click the icon there (or Alt+Shift+S). |
+| "Pick a voice channel…" | Join a voice channel in Discord or choose one in the popup. |
+| Bot joins but silent | Check `/status`: is the stream "playing"? Is the tab really playing (not muted in the site)? DRM-protected players may capture as silence. |
+| You don't hear the tab yourself | Settings → "Hear the tab locally" on, Local volume up. |
+| Choppy audio for friends | Raise Buffer in Settings (e.g. 800 ms), or lower Quality. |
+| Commands don't show | `npm run deploy-commands`; invite link must include `applications.commands`. |
+| `npm run voice-report -w server` | Should show `aes-256-gcm: yes` and `@snazzah/davey` (Discord's required voice encryption). No Opus library or FFmpeg needed. |

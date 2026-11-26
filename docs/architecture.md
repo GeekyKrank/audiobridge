@@ -7,107 +7,119 @@ bot on my own Oracle Cloud VPS. Only the chosen tab is captured — never the ga
 Discord itself, or the desktop.
 
 ```
- Windows PC (Chrome)                          Oracle VPS (1 process, Node.js)              Discord
-┌──────────────────────────────┐   WSS      ┌───────────────────────────────────┐  voice  ┌──────────┐
-│ SoundCloud tab               │  binary    │ ingest (WebSocket, auth, limits)  │  UDP    │ voice    │
-│   │ chrome.tabCapture        │  Opus      │   │ jitter buffer (~300–600 ms)   │ ──────► │ channel  │
-│   ▼                          │  packets   │   ▼                               │         │ friends  │
-│ offscreen document           │ ─────────► │ Readable of Opus packets          │         └──────────┘
-│   ├─► AudioContext → speakers│            │   ▼                               │
-│   └─► WebCodecs AudioEncoder │            │ @discordjs/voice AudioPlayer      │
-│        (Opus 48k stereo 20ms)│            │   (StreamType.Opus: no transcode) │
-│ popup UI / service worker    │            │ discord.js bot + slash commands   │
-└──────────────────────────────┘            └───────────────────────────────────┘
+ Windows PC (Chrome)                            Oracle VPS (one Node.js process)                Discord
+┌────────────────────────────────┐   WSS      ┌──────────────────────────────────────┐  voice  ┌─────────┐
+│ popup (UI)  ⇄  service worker  │  binary    │ Caddy :443 (TLS) → 127.0.0.1:8787     │  UDP    │ voice   │
+│                   │ tabCapture │  Opus      │ ├ HTTP API  /api/* (token, CORS)      │ ──────► │ channel │
+│                   ▼ streamId   │  packets   │ └ WebSocket /ws (token, limits)       │         │ friends │
+│ offscreen document             │ ─────────► │      ▼ StreamHub (one stream max)     │         └─────────┘
+│  getUserMedia(tab) ─► speakers │            │      ▼ OpusJitterStream (≈400 ms)     │
+│        └► AudioWorklet (20 ms) │            │      ▼ AudioPlayer, StreamType.Opus   │
+│           └► AudioEncoder Opus │            │        (no decoding / re-encoding)    │
+│              └► StreamClient   │            │ discord.js bot + slash commands       │
+└────────────────────────────────┘            └──────────────────────────────────────┘
 ```
-
-The bot and the ingest server run in **one Node.js process**: on a 1 vCPU / 1 GB
-VM, one process (~80–120 MB RSS) is cheaper than two plus an IPC layer, and the
-"WebSocket → voice player" hand-off is just an in-memory stream.
 
 ## Components
 
-| Part | Where | Tech |
+| Part | Files | Responsibility |
 |---|---|---|
-| Extension (popup, service worker, offscreen doc) | Chrome on Windows | Manifest V3, `chrome.tabCapture`, `chrome.offscreen`, WebCodecs |
-| Ingest server | VPS | Node 22, TypeScript, `ws` |
-| Discord bot | VPS (same process) | `discord.js` 14, `@discordjs/voice` 0.19 |
-| Reverse proxy / TLS | VPS | Caddy (automatic Let's Encrypt) — Phase 5 |
+| Popup | `extension/src/popup/*` | Tab picker, Discord channel/join, Share button, live stats, settings |
+| Service worker | `extension/src/background.js` | Gets the tab stream ID, owns the offscreen doc, tracks the shared tab (title/close), badge, shortcut, context menu. State in `chrome.storage.session` |
+| Offscreen document | `extension/src/offscreen.js` | Lives while sharing: capture, local playback, encoder, WebSocket |
+| Audio engine | `extension/src/audio/engine.js`, `capture-worklet.js` | 48 kHz AudioContext → worklet (exact 20 ms frames + loudness) → WebCodecs Opus |
+| Stream client | `extension/src/net/stream-client.js` | Auth, start, audio send with back-pressure drop, ping/RTT, reconnect with backoff |
+| Protocol | `shared/protocol.js` (+ `.d.ts`) | Packet format, close codes, limits; copied into the extension |
+| Server | `server/src/net/server.ts` | HTTP API + WebSocket, auth, origin check, rate limits, heartbeat |
+| Stream hub | `server/src/stream/hub.ts` | Single active stream, takeover, 15 s reconnect grace, stats |
+| Discord sink | `server/src/stream/discord-sink.ts` | Picks/join channel, feeds jitter buffer into the voice player |
+| Recorder sink | `server/src/stream/recorder-sink.ts` | Optional `.ogg` recording (`RECORD_DIR`) for testing |
+| Bot | `server/src/discord/*` | Login, voice connections, slash commands, auto-leave |
 
 ## Audio pipeline decision
 
-Discord voice *is* Opus: 48 kHz, stereo, 20 ms frames. If the browser produces
-exactly that, the server never decodes or re-encodes anything — it just forwards
-packets. That is the single most important choice for a 1-CPU server.
-
-### Options considered
+Discord voice *is* Opus: 48 kHz, stereo, 20 ms frames. The browser produces exactly
+that, so the server only forwards packets. That's what keeps a 1-CPU VM idle.
 
 | Option | Verdict |
 |---|---|
-| Raw PCM over WebSocket | ~1.5 Mbit/s up, server must Opus-encode (CPU). Rejected. |
-| `MediaRecorder` (`audio/webm;codecs=opus`) → server demuxes WebM | Works, but MediaRecorder batches into chunks (≥ ~100–250 ms timeslices) and the container adds parsing. **Kept as fallback** (prism-media ships a WebM demuxer). |
-| **WebCodecs `AudioEncoder` (Opus) → raw packets over WSS** | One packet per 20 ms, no container, exact Discord format, browser encoder runs natively. **Chosen.** |
-| WebRTC to server | Lowest latency, but needs a server-side WebRTC stack (ICE/DTLS/SRTP — e.g. mediasoup/werift): heavy, complex, extra UDP ports. Overkill for 1–3 s target. Possible later. |
-| FFmpeg on server | Only needed if we transcode. Not needed in the chosen design. |
-
-### Chosen format
+| Raw PCM over WebSocket | ~1.5 Mbit/s upload and server-side encoding. Rejected. |
+| `MediaRecorder` (WebM/Opus) | Chunked output (≥100 ms), needs WebM demuxing. Possible fallback, not needed. |
+| **AudioWorklet + WebCodecs `AudioEncoder` (Opus) → WSS** | Exact 20 ms packets in Discord's format, native encoder. **Chosen.** |
+| WebRTC | Needs a WebRTC stack on the server (ICE/DTLS/SRTP, UDP ports). Overkill for this. |
+| FFmpeg on server | Only for transcoding, which we never do. |
 
 | Parameter | Value |
 |---|---|
-| Codec | Opus (WebCodecs `AudioEncoder`, `application: "audio"`) |
-| Sample rate | 48 000 Hz |
-| Channels | 2 (stereo) |
-| Frame / packet duration | 20 ms (50 packets/s) |
-| Bitrate | 128 kbit/s default (64–192 selectable). Discord channels default to 64 kbit/s and go up to 96 (or higher with Server Boost); sending more than the listener's client plays back is wasted upload. |
-| Transport | WSS binary messages, one Opus packet each + small header (sequence number, timestamp) |
-| Upload bandwidth | ≈ 128 kbit/s + ~10 kbit/s overhead ≈ 17 KB/s |
-| Server buffer | jitter buffer target 300–600 ms (configurable), drops oldest when over a hard cap |
+| Codec | Opus via WebCodecs (`application: audio`, `signal: music` when supported) |
+| Sample rate / channels | 48 000 Hz, stereo (AudioContext resamples 44.1 kHz sources) |
+| Packet duration | 20 ms (50 packets/s), one packet per WebSocket message |
+| Bitrate | 128 kbit/s default; 64 / 96 / 128 / 160 selectable |
+| Packet header | 4 bytes: kind, flags (silent), uint16 sequence |
+| Upload | ≈ 17 KB/s at 128 kbit/s |
+| Client back-pressure | drop packets if > 48 KB is queued in the socket (never let delay grow) |
+| Server buffer | jitter buffer target 400 ms (extension setting, 100–2000), hard cap 1500 ms (`MAX_BUFFER_MS`): over the cap, oldest packets are dropped back to target |
+| Underrun | buffer re-fills to target before resuming; > 1 s without audio → player stops, restarts on next packet |
 
-### Latency budget (MVP target: under ~1 s, 1–3 s acceptable)
+Measured in the automated browser test: 128 kbit/s, 0 sequence gaps; recorded output is
+valid 48 kHz stereo Opus with the test tone intact.
 
-encode 20 ms + network to Frankfurt 20–40 ms + jitter buffer 300–600 ms +
-Discord's own path ~100–200 ms. TCP head-of-line blocking is the main risk of
-WebSocket; the jitter buffer absorbs it. This can be tuned down later.
+**Latency** ≈ 20 ms frame + network (Frankfurt from Europe ~20–40 ms) + server
+buffer (400 ms) + Discord (~100–200 ms) ≈ **0.6 s**. Lower the Buffer setting for less
+delay, raise it if friends hear dropouts.
 
-### Pause / resume / seek / track change
+## Following the browser (pause, seek, track change)
 
-The browser stays the source of truth. A captured tab track keeps delivering
-frames while paused (silence), so: pause ⇒ silence is sent (Opus silence is tiny,
-and the server can stop "speaking" after a run of silent frames); resume, seek,
-track change ⇒ whatever the tab plays next is what gets encoded. No site APIs,
-no downloading, no Discord commands needed. Tab closed ⇒ the track ends, the
-extension sends `stop`, the server ends the stream.
+The browser is the source of truth; no website APIs are used.
 
-### Keeping the tab audible
+* **Pause**: the worklet measures loudness every 20 ms. After 1.5 s of silence the
+  extension stops sending packets and tells the server `audible:false`; the server
+  ends the playback pipe so the bot stops "speaking" (no stale audio, no hiss).
+* **Resume / seek / next track**: whatever the tab plays is encoded next; the first
+  loud packet restarts playback on Discord within the buffer time.
+* **Volume**: capture happens after the page's own player volume, so the site's
+  volume slider changes what friends hear. The "Local volume" setting only changes
+  what *you* hear.
+* **Tab closed / navigated away**: Chrome ends the capture; the service worker also
+  watches `tabs.onRemoved`. Sharing stops and the popup says why. Navigation inside
+  the tab keeps the capture (Chrome keeps it across navigations).
+* **Metadata**: tab title, site and favicon (via `tabs`), sent as `meta` messages and
+  shown in `/status`. No scraping.
 
-`tabCapture` mutes the tab locally while captured. The offscreen document routes
-the captured stream into an `AudioContext` → `destination` so you still hear it
-(the "local monitoring" setting).
+## Reconnection and duplicates
+
+* WebSocket drops → client retries after 1, 2, 4, 8, 15 s… and re-sends `start`.
+* The server keeps the stream for 15 s after a drop (`RECONNECT_GRACE_MS`), so a
+  quick reconnect resumes seamlessly; afterwards it stops the stream.
+* Only one stream exists at a time. A new `start` replaces the old one and closes
+  the old socket with code 4003, which the old client treats as final (no
+  reconnect fight).
+* Voice connection drops are retried by `@discordjs/voice`; if the bot is kicked it
+  stays out until you press Join or use `/join`.
+
+## Chrome restrictions that shape the UX
+
+* `chrome.tabCapture.getMediaStreamId({targetTabId})` only works for tabs where the
+  user has **invoked** the extension (clicked its icon there, used its shortcut, or its
+  context menu). So the normal flow is: on the SoundCloud tab click the SoundBridge icon
+  → Share Audio. The popup can list other tabs, and sharing one works if SoundBridge was
+  opened on it before; otherwise the popup offers "Go to that tab".
+  Keyboard: **Alt+Shift+S** toggles sharing of the current tab.
+* Captured tabs are muted by Chrome; the offscreen document plays the audio back
+  locally (the "Hear the tab locally" setting).
+* DRM-protected playback (e.g. Spotify/Netflix with Widevine) may be captured as
+  silence. SoundBridge does not try to bypass that.
 
 ## Security model
 
-* Bot token lives only in `server/.env` on the VPS. The extension never sees it.
-* Extension authenticates with a long random **access token** (shared secret) on
-  WebSocket upgrade; unauthenticated upgrades are rejected before any audio is read.
-* WSS only in production (Caddy terminates TLS). Node listens on `127.0.0.1` only.
-* Firewall: only 22 (SSH), 80/443 (Caddy) open — both in the Oracle security list
-  and the VM's iptables/ufw.
-* Ingest validates every message: max message size, max packets/s, expected header.
-* One active stream per guild; a new authenticated connection replaces the old one
-  (prevents duplicates after reconnect).
-* Slash commands only work in the configured guild and optionally only for
-  `ALLOWED_USER_IDS`.
-
-## Repository layout
-
-```
-soundbridge/
-├── server/            # Node.js: Discord bot + (Phase 3+) audio ingest
-│   ├── src/
-│   │   ├── config/    # env validation
-│   │   ├── discord/   # client, voice manager, slash commands
-│   │   └── util/      # logger
-│   └── scripts/       # deploy-commands
-├── extension/         # Phase 2+: Chrome MV3 extension
-├── shared/            # Phase 3+: wire protocol types shared by both
-└── docs/
-```
+* Bot token only in `server/.env` on the VPS (mode 600, owned by the service user).
+* Extension ↔ server: `ACCESS_TOKEN` (≥ 24 chars, constant-time compare) sent as the
+  first WebSocket message and as `Authorization: Bearer` for the API. 10 failures per
+  IP → blocked for 10 minutes.
+* Browser origin check: only `chrome-extension://` origins (or exactly
+  `EXTENSION_ID`) — ordinary websites can't talk to the server even from your browser.
+* WSS/HTTPS through Caddy; Node listens on `127.0.0.1` only. Firewall: 22, 80, 443.
+* Input validation: 8 KB message cap, 200 messages/s, strict JSON schemas, audio
+  packet bounds (≤ 1275 bytes Opus), no compression (no zip bombs, less CPU).
+* Slash commands: only in `DISCORD_GUILD_ID`, optionally only `ALLOWED_USER_IDS`.
+* systemd hardening (no new privileges, read-only system, memory cap 350 MB).

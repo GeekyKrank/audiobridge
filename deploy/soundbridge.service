@@ -1,0 +1,36 @@
+[Unit]
+Description=SoundBridge (Discord bot + browser audio ingest)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=soundbridge
+Group=soundbridge
+WorkingDirectory=/opt/soundbridge/server
+ExecStart=/usr/bin/node --env-file=/opt/soundbridge/server/.env dist/index.js
+Restart=always
+RestartSec=3
+Environment=NODE_ENV=production
+# Keep the 1 GB VM healthy: cap memory, low CPU priority vs. sshd.
+MemoryMax=350M
+Nice=5
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictNamespaces=true
+CapabilityBoundingSet=
+# Only needed if RECORD_DIR is set to a path under /opt/soundbridge/recordings
+ReadWritePaths=-/opt/soundbridge/recordings
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,12 @@
+# SoundBridge reverse proxy. Caddy gets and renews the HTTPS certificate automatically
+# and upgrades WebSockets on its own.
+__DOMAIN__ {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:__PORT__
+	log {
+		output file /var/log/caddy/soundbridge.log {
+			roll_size 5MiB
+			roll_keep 3
+		}
+	}
+}

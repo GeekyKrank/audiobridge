@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "SoundBridge",
+  "version": "0.2.0",
+  "description": "Share one browser tab's audio to your Discord voice channel through your own SoundBridge server.",
+  "minimum_chrome_version": "116",
+  "permissions": ["tabCapture", "activeTab", "offscreen", "storage", "tabs", "contextMenus"],
+  "background": { "service_worker": "src/background.js", "type": "module" },
+  "action": {
+    "default_popup": "src/popup/popup.html",
+    "default_title": "SoundBridge",
+    "default_icon": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png" }
+  },
+  "icons": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
+  "commands": {
+    "toggle-share": {
+      "suggested_key": { "default": "Alt+Shift+S" },
+      "description": "Share the current tab to Discord (press again to stop)"
+    }
+  },
+  "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'self'" }
+}
